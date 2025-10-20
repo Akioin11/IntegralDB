@@ -1,1 +1,5 @@
 cred.json
+/attachments
+
+*.csv
+*.json

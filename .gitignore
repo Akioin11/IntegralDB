@@ -1,5 +1,6 @@
 cred.json
 /attachments
-
+/deprecated
 *.csv
 *.json
+.env

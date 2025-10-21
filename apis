@@ -1,3 +1,0 @@
-$env:GOOGLE_API_KEY = "AIzaSyCEeSe3Aev_Ihbfil6_y16w4wh5qe4w1ag"
-$env:SUPABASE_URL = "https://ojdyszwmulrcfstwonni.supabase.co"
-$env:SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qZHlzendtdWxyY2ZzdHdvbm5pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA3OTQ5MTcsImV4cCI6MjA3NjM3MDkxN30.PAJkK8cpJwJNv-CPjP-yjHUhtndr33Y1y2OejXeSc3Q"

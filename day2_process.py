@@ -223,13 +223,19 @@ def main():
             # 4. Insert all rows for this *document* in a batch
             if rows_to_insert:
                 try:
-                    response = supabase.table('supplier_info').insert(rows_to_insert).execute()
+                    # This is the fix.
+                    # We use upsert and tell it to do nothing on conflict.
+                    response = supabase.table('supplier_info').upsert(
+                        rows_to_insert, 
+                        on_conflict='source_pdf_path,product_name' # This is the constraint name
+                    ).execute()
+                    
                     if response.error:
-                        logging.error(f"Supabase insert error for {doc_source_name}: {response.error}")
+                        logging.error(f"Supabase upsert error for {doc_source_name}: {response.error}")
                     else:
-                        logging.info(f"Successfully inserted {len(rows_to_insert)} products from {doc_source_name}")
+                        logging.info(f"Successfully upserted/skipped {len(rows_to_insert)} products from {doc_source_name}")
                 except Exception as e:
-                    logging.error(f"Error during Supabase batch insert: {e}")
+                    logging.error(f"Error during Supabase batch upsert: {e}")
 
     logging.info("--- Day 2 Complete ---")
 

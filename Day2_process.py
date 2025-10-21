@@ -2,162 +2,195 @@ import os
 import csv
 import json
 import pdfplumber
-import google.generativeai as genai # <-- CHANGED
+import google.generativeai as genai
 from supabase import create_client, Client
+import logging
+from pydantic import BaseModel, Field # <-- Field is no longer used, but we'll leave the import
+from typing import List, Optional
+from dotenv import load_dotenv
+
+# --- 0. LOAD ENVIRONMENT VARIABLES ---
+load_dotenv() 
+
+# Suppress pdfplumber warnings
+logging.getLogger("pdfplumber").setLevel(logging.ERROR)
+
+# --- 0. PYDANTIC MODELS (FIXED) ---
+#
+# *** THIS IS THE FIX ***
+# We are removing all `Field(...)` calls.
+# The `google-generativeai` library has a bug and cannot
+# parse the `Field` object.
+# Using simple type hints like `Optional[str]` works.
+#
+
+class Product(BaseModel):
+    """Represents a single product"""
+    product_name: str
+    price: Optional[float]
+    sku: Optional[str]
+    catalog_details: Optional[str]
+    product_specifications: Optional[str]
+
+class SupplierData(BaseModel):
+    """The root object for all extracted data from a document"""
+    supplier_name: str
+    contact_email: Optional[str]
+    contact_phone: Optional[str]
+    products: List[Product]
 
 # --- 1. CONFIGURATION ---
 
-# Load credentials from environment variables
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") # <-- CHANGED
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Initialize clients
+if not all([GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY]):
+    print("Error: Missing environment variables.")
+    print("Please ensure you have a .env file with GOOGLE_API_KEY, SUPABASE_URL, and SUPABASE_KEY.")
+    exit()
+
 try:
-    # Configure the Gemini client
-    genai.configure(api_key=GOOGLE_API_KEY) # <-- CHANGED
+    genai.configure(api_key=GOOGLE_API_KEY)
     
-    # Set up the model with JSON output config
     generation_config = genai.GenerationConfig(
-        response_mime_type="application/json"
+        response_mime_type="application/json",
+        response_schema=SupplierData  # <-- This will now parse correctly
     )
+    
     gemini_model = genai.GenerativeModel(
-        'gemini-1.5-flash', # Use a modern, fast model
+        'gemini-2.5-flash',
         generation_config=generation_config
-    ) # <-- CHANGED
+    )
     
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("Clients initialized successfully (Gemini & Supabase).")
+    print("Clients initialized (Gemini w/ Pydantic & Supabase).")
 except Exception as e:
-    print(f"Error initializing clients: {e}")
-    print("Please set your GOOGLE_API_KEY, SUPABASE_URL, and SUPABASE_KEY environment variables.")
+    print(f"Error initializing clients: {e}") # <-- This is where it was failing
     exit()
 
 # --- 2. PARSING ---
-
+# (Unchanged)
 def parse_pdf(file_path):
-    """Reads all text from a PDF file."""
     if not os.path.exists(file_path):
         return ""
-        
     try:
         with pdfplumber.open(file_path) as pdf:
             full_text = ""
             for page in pdf.pages:
-                full_text += page.extract_text() or ""
+                full_text += page.extract_text(x_tolerance=1) or ""
             return full_text
     except Exception as e:
         print(f"Error reading PDF {file_path}: {e}")
         return ""
 
-# --- 3. LLM EXTRACTION (MODIFIED FOR GEMINI) ---
+# --- 3. LLM EXTRACTION (FIXED) ---
 
-def extract_structured_data(text_content):
-    """Uses Gemini to extract structured data from raw text."""
+def extract_structured_data(text_content: str) -> Optional[SupplierData]:
+    """
+    Uses Gemini to extract structured data using the Pydantic schema.
+    Returns an instantiated SupplierData object or None.
+    """
     
-    # Gemini works best with the prompt and instructions combined.
-    prompt = """
+    prompt = f"""
     You are an expert data extraction assistant.
-    From the following text, extract supplier and product information.
-    The text could be from an email body or a PDF (catalog, invoice).
+    Analyze the following text from a supplier email or PDF.
+    Extract the supplier's name, contact email, contact phone,
+    and a complete list of all products mentioned.
     
-    Return a single JSON object with this exact structure:
-    {
-      "supplier_name": "Example Supplier Inc.",
-      "contact_email": "sales@example.com",
-      "products": [
-        {
-          "product_name": "Widget A",
-          "price": 199.99,
-          "sku": "WID-A-123",
-          "catalog_details": "Premium quality steel widget."
-        }
-      ]
-    }
+    For each product, extract:
+    - product_name
+    - price (as a number)
+    - sku
+    - catalog_details (general description)
+    - product_specifications (technical details like size, material, etc.)
     
-    Rules:
-    - "supplier_name": The name of the supplier company.
-    - "products": A list of product objects.
-    - "price": Must be a number (float or int), no currency symbols.
-    - If info is missing, use null.
-    - If no products are found, return an empty "products" list.
-    
-    Here is the text to analyze:
-    ---
+    --- TEXT TO ANALYZE ---
     {text_content}
     ---
     """
     
-    print(f"Sending {len(text_content)} chars to Gemini for extraction...")
+    print(f"Sending {len(text_content)} chars to Gemini for structured extraction...")
     
     try:
-        # Pass the combined prompt to the model
-        response = gemini_model.generate_content(prompt.format(text_content=text_content))
+        response = gemini_model.generate_content(prompt)
         
-        # The 'generation_config' ensures response.text is valid JSON
-        return json.loads(response.text)
+        # *** THIS IS THE FIX ***
+        # The 'genai.GenerativeModel' client puts the raw JSON string in .text
+        # We just need to parse it ourselves.
         
-    except Exception as e:
-        print(f"Error calling Gemini: {e}")
-        # You can print response.prompt_feedback here for debugging
+        print(f"[Gemini Raw JSON Response]: {response.text}")
+        
+        # 1. Parse the string into a Python dict
+        data_dict = json.loads(response.text)
+        
+        # 2. Parse the dict into our Pydantic model
+        supplier_data = SupplierData(**data_dict)
+        
+        return supplier_data
+        
+    except json.JSONDecodeError as json_err:
+        print(f"!!! Failed to decode JSON from Gemini. Error: {json_err}")
+        print(f"!!! Raw response was: {response.text}")
         return None
-
-# --- 4. DATABASE INSERTION ---
-# (This function is UNCHANGED from the previous guide)
-
-def insert_data_into_db(data, email_id):
-    """Inserts the structured data into Supabase Postgres tables."""
+    except Exception as e:
+        # Catch Pydantic validation errors or other issues
+        print(f"Error parsing Gemini response into Pydantic model: {e}")
+        return None
     
-    supplier_name = data.get("supplier_name")
-    if not supplier_name:
-        print("Skipping insert: No supplier name found.")
+# --- 4. DATABASE INSERTION ---
+# (Unchanged)
+def insert_data_into_db(data: SupplierData, email_id: str):
+    
+    if not data.supplier_name:
+        print("Skipping insert: No supplier name found in extracted data.")
         return
 
     try:
-        # Upsert Supplier
         supplier_row = supabase.table("suppliers").upsert(
             {
-                "supplier_name": supplier_name,
-                "contact_email": data.get("contact_email"),
+                "supplier_name": data.supplier_name,
+                "contact_email": data.contact_email,
+                "contact_phone": data.contact_phone,
                 "extracted_from_email_id": email_id
             },
-            on_conflict="supplier_name" # Use the UNIQUE column
+            on_conflict="supplier_name"
         ).execute().data[0]
         
         supplier_db_id = supplier_row['id']
-        print(f"Upserted supplier: {supplier_name} (ID: {supplier_db_id})")
+        print(f"Upserted supplier: {data.supplier_name} (ID: {supplier_db_id})")
 
-        # Batch Insert Products
         products_to_insert = []
-        for product in data.get("products", []):
-            if product.get("product_name") and product.get("price") is not None:
+        for product in data.products:
+            if product.product_name:
                 products_to_insert.append({
                     "supplier_id": supplier_db_id,
-                    "product_name": product.get("product_name"),
-                    "price": product.get("price"),
-                    "sku": product.get("sku"),
-                    "catalog_details": product.get("catalog_details")
+                    "product_name": product.product_name,
+                    "price": product.price,
+                    "sku": product.sku,
+                    "catalog_details": product.catalog_details,
+                    "product_specifications": product.product_specifications
                 })
             
         if products_to_insert:
             product_rows = supabase.table("products").insert(products_to_insert).execute()
-            print(f"Inserted {len(product_rows.data)} products for {supplier_name}.")
+            print(f"Inserted {len(product_rows.data)} products for {data.supplier_name}.")
+        else:
+            print("No valid products found in extracted data to insert.")
             
     except Exception as e:
-        print(f"Error inserting into Supabase: {e}")
+        print(f"!!! Error inserting into Supabase: {e}")
+        print("!!! Check your Supabase schema and RLS policies.")
 
 # --- 5. MAIN ORCHESTRATION ---
-# (This function is UNCHANGED from the previous guide)
-
+# (Unchanged)
 def main():
-    """Main function to run the Day 2 pipeline."""
-    csv_file = "supplier_emails.csv" # From Day 1
-    
+    csv_file = "supplier_emails.csv"
     if not os.path.exists(csv_file):
         print(f"Error: {csv_file} not found. Did you run Day 1?")
         return
 
-    print("--- Starting Day 2: Processing and Extraction (Gemini) ---")
+    print("--- Starting Day 2: Processing and Extraction (Gemini + Pydantic) ---")
     
     with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -165,30 +198,31 @@ def main():
             email_id = row['id']
             print(f"\nProcessing Email ID: {email_id}")
             
-            # 1. Combine all text sources
             full_text_content = ""
             full_text_content += f"Email Subject: {row['subject']}\n"
             full_text_content += f"Email Body:\n{row['body']}\n\n"
             
-            # 2. Parse PDF attachments
             if row['attachments']:
-                pdf_path = row['attachments'].split(", ")[0]
-                pdf_text = parse_pdf(pdf_path)
-                if pdf_text:
-                    full_text_content += f"--- PDF Attachment Content ({pdf_path}) ---\n"
-                    full_text_content += pdf_text
+                attachment_paths = row['attachments'].split(", ")
+                for pdf_path in attachment_paths:
+                    if pdf_path.endswith('.pdf'):
+                        pdf_text = parse_pdf(pdf_path)
+                        if pdf_text:
+                            full_text_content += f"\n--- PDF Attachment Content ({pdf_path}) ---\n"
+                            full_text_content += pdf_text
             
-            # 3. Extract with LLM (now using Gemini)
+            if not full_text_content.strip():
+                 print("Skipping: No text content found in email or PDF.")
+                 continue
+
             extracted_data = extract_structured_data(full_text_content)
             
             if extracted_data:
-                # 4. Insert into Database
                 insert_data_into_db(extracted_data, email_id)
             else:
-                print(f"No data extracted for Email ID: {email_id}")
+                print(f"No data extracted or saved for Email ID: {email_id}")
 
     print("\n--- Day 2 Complete ---")
-    print("Structured data has been extracted and saved to Supabase.")
 
 if __name__ == "__main__":
     main()

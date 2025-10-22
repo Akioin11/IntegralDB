@@ -119,7 +119,7 @@ def get_generative_answer(model: genai.GenerativeModel, query: str, context_chun
         You are an expert assistant for a supplier database.
         Use the following pieces of context from supplier documents to answer the user's question.
         If the answer isn't in the context, say you don't know. Do not make up information.
-
+        Reply with general knowledge if context/data not available
         CONTEXT:
         {formatted_context}
 

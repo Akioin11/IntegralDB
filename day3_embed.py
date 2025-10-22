@@ -68,12 +68,16 @@ def main():
 
     print("--- Starting PDF Indexing ---")
     
-    # First, clear any old documents from the same source
-    # This prevents re-indexing the same file
+    # Get all PDF files
     all_files = [f for f in os.listdir(attachment_dir) if f.endswith('.pdf')]
+    
+    # First, clear any old documents from the same sources
     for pdf_file in all_files:
         print(f"Deleting old entries for: {pdf_file}")
-        supabase.table('documents').delete().eq('source_filename', pdf_file).execute()
+        try:
+            supabase.table('documents').delete().eq('source_filename', pdf_file).execute()
+        except Exception as e:
+            print(f"Could not delete old entries for {pdf_file}: {e}")
 
     # Now, process and embed each PDF
     for pdf_file in all_files:
@@ -90,19 +94,36 @@ def main():
         
         documents_to_insert = []
         for i, chunk in enumerate(chunks):
-            embedding = get_embedding(chunk)
+            
+            # *** THIS IS THE FIX ***
+            # Sanitize the chunk to remove null bytes that Postgres hates
+            clean_chunk = chunk.replace('\u0000', '').replace('\x00', '')
+            
+            # Also skip embedding/inserting if the chunk is now just whitespace
+            if not clean_chunk.strip():
+                print(f"  ...skipping empty/null chunk {i+1}/{len(chunks)}")
+                continue
+                
+            embedding = get_embedding(clean_chunk) # Embed the *clean* text
             if embedding:
                 documents_to_insert.append({
                     "source_filename": pdf_file,
-                    "content": chunk,
+                    "content": clean_chunk, # Insert the *clean* text
                     "embedding": embedding
                 })
-            print(f"  ...created embedding for chunk {i+1}/{len(chunks)}")
+                print(f"  ...created embedding for chunk {i+1}/{len(chunks)}")
+            else:
+                print(f"  ...FAILED to create embedding for chunk {i+1}")
         
         # Batch insert all chunks for this PDF
         if documents_to_insert:
-            supabase.table('documents').insert(documents_to_insert).execute()
-            print(f"Successfully inserted {len(documents_to_insert)} chunks for {pdf_file}.")
+            try:
+                supabase.table('documents').insert(documents_to_insert).execute()
+                print(f"Successfully inserted {len(documents_to_insert)} chunks for {pdf_file}.")
+            except Exception as e:
+                # Catch the error and report it, but don't crash the script
+                print(f"!!! FAILED TO INSERT BATCH for {pdf_file}: {e}")
+                print("!!! This PDF might have other encoding issues, but the script will continue.")
 
     print("\n--- Indexing Complete ---")
 

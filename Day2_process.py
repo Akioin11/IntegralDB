@@ -7,10 +7,18 @@ from supabase import create_client, Client
 import logging
 from pydantic import BaseModel, Field # <-- Field is no longer used, but we'll leave the import
 from typing import List, Optional
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # --- 0. LOAD ENVIRONMENT VARIABLES ---
-load_dotenv() 
+# Robust .env loading: find from current working dir or fall back to script dir
+dotenv_path = find_dotenv(usecwd=True)
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    from pathlib import Path
+    alt_env = Path(__file__).resolve().parent / ".env"
+    if alt_env.exists():
+        load_dotenv(alt_env)
 
 # Suppress pdfplumber warnings
 logging.getLogger("pdfplumber").setLevel(logging.ERROR)
@@ -41,14 +49,22 @@ class SupplierData(BaseModel):
 
 # --- 1. CONFIGURATION ---
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+def _get_env(name: str):
+    v = os.environ.get(name)
+    if v is None:
+        return None
+    return v.strip().strip('"').strip("'")
+
+GOOGLE_API_KEY = _get_env("GOOGLE_API_KEY")
+SUPABASE_URL = _get_env("SUPABASE_URL")
+SUPABASE_KEY = _get_env("SUPABASE_KEY")
 
 if not all([GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY]):
     print("Error: Missing environment variables.")
     print("Please ensure you have a .env file with GOOGLE_API_KEY, SUPABASE_URL, and SUPABASE_KEY.")
-    exit()
+    print(f"CWD: {os.getcwd()}")
+    print(f"find_dotenv found: {dotenv_path}")
+    exit(1)
 
 try:
     genai.configure(api_key=GOOGLE_API_KEY)

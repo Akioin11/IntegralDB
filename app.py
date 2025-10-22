@@ -1,15 +1,46 @@
 import streamlit as st
 import google.generativeai as genai
 from supabase import create_client, Client
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
+from pathlib import Path
 import os
 import json
 
 # --- 1. CONFIGURATION ---
-load_dotenv()
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Load .env robustly regardless of where Streamlit is launched from
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path:
+    load_dotenv(_dotenv_path)
+else:
+    # Fallback: look next to this file
+    _alt_env = Path(__file__).resolve().parent / ".env"
+    if _alt_env.exists():
+        load_dotenv(_alt_env)
+
+def _get_env(name: str) -> str | None:
+    val = os.environ.get(name)
+    if val is None:
+        return None
+    # Strip surrounding quotes/whitespace just in case
+    return val.strip().strip('"').strip("'")
+
+GOOGLE_API_KEY = _get_env("GOOGLE_API_KEY")
+SUPABASE_URL = _get_env("SUPABASE_URL")
+SUPABASE_KEY = _get_env("SUPABASE_KEY")
+
+# Validate required configuration before creating clients
+missing = [k for k, v in {
+    "GOOGLE_API_KEY": GOOGLE_API_KEY,
+    "SUPABASE_URL": SUPABASE_URL,
+    "SUPABASE_KEY": SUPABASE_KEY,
+}.items() if not v]
+
+if missing:
+    st.error(
+        "Missing required environment variables: " + ", ".join(missing) +
+        "\nCreate a .env file in the project root with these keys, or set them in your environment."
+    )
+    st.stop()
 
 # Configure clients
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -89,7 +120,7 @@ def query_vector_store(query_text: str):
         # 2. Call the 'match_documents' SQL function we created
         matches = supabase.rpc('match_documents', {
             'query_embedding': query_embedding,
-            'match_threshold': 0.6, # Adjust this threshold as needed
+            'match_threshold': 0.3, # Adjust this threshold as needed
             'match_count': 3
         }).execute()
         

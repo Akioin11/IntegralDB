@@ -8,7 +8,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # We use 'readonly' as we are only reading emails.
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly',
+          'https://www.googleapis.com/auth/drive.readonly']
 
 def get_gmail_service():
     """Authenticates with Gmail API and returns a service object."""

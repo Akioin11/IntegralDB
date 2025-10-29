@@ -5,3 +5,4 @@ cred.json
 *.json
 .env
 apis
+integraldb/null

@@ -6,3 +6,7 @@ cred.json
 .env
 apis
 integraldb/null
+/release/dashboard/modules/__pycache__
+/release/dashboard/__pycache__
+/release/venv
+/dashboard

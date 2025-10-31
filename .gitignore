@@ -10,3 +10,4 @@ integraldb/null
 /release/dashboard/__pycache__
 /release/venv
 /dashboard
+*.pyc

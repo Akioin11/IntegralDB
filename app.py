@@ -50,12 +50,12 @@ SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 missing = [k for k, v in {
     "GOOGLE_API_KEY": GOOGLE_API_KEY,
     "SUPABASE_URL": SUPABASE_URL,
-    "SUPABASE_ANON_KEY": SUPABASE_ANON_KEY,
+    "SUPABASE_KEY": SUPABASE_KEY,
 }.items() if not v]
 
 if missing:
     st.error("Missing required environment variables: " + ", ".join(missing))
-    st.info("Add them to Streamlit secrets (or local .env for dev): GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY")
+    st.info("Add them to Streamlit secrets (or local .env for dev): GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY")
     st.stop()
 
 # -------------------------
@@ -65,7 +65,7 @@ try:
     genai.configure(api_key=GOOGLE_API_KEY)
 
     # Use anon key for Streamlit frontend auth and normal queries (service_role not included)
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     # Gemini models
     embedding_model = "models/text-embedding-004"

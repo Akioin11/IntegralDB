@@ -45,7 +45,7 @@ def _get_secret(name: str) -> Optional[str]:
 GOOGLE_API_KEY = _get_secret("GOOGLE_API_KEY")
 SUPABASE_URL = _get_secret("SUPABASE_URL")
 # IMPORTANT: Use the anon key on the client/frontend (Streamlit). Do NOT put service_role here.
-SUPABASE_ANON_KEY = _get_secret("SUPABASE_ANON_KEY")
+SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 
 missing = [k for k, v in {
     "GOOGLE_API_KEY": GOOGLE_API_KEY,

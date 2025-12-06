@@ -3,195 +3,155 @@ import streamlit as st
 import google.generativeai as genai
 from supabase import create_client, Client
 from dotenv import load_dotenv, find_dotenv
-from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
-# --- 1. CONFIGURATION (Unchanged) ---
-_dotenv_path = find_dotenv(usecwd=True)
-if _dotenv_path:
-    load_dotenv(_dotenv_path)
-else:
-    _alt_env = Path(__file__).resolve().parent / ".env"
-    if _alt_env.exists():
-        load_dotenv(_alt_env)
-    # Fallback for environments where __file__ isn't defined
-    elif (Path.cwd() / ".env").exists():
-         load_dotenv(Path.cwd() / ".env")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="IntegralDB", layout="wide")
 
+# Robust Secret Management for Streamlit Cloud vs Local
+def get_secret(key: str) -> Optional[str]:
+    # 1. Check Streamlit Secrets (Cloud Deployment standard)
+    if key in st.secrets:
+        return st.secrets[key]
+    # 2. Check OS Environment (Docker/System)
+    if key in os.environ:
+        return os.environ[key]
+    # 3. Fallback to .env (Local Dev)
+    load_dotenv(find_dotenv())
+    return os.environ.get(key)
 
-def _get_env(name: str) -> Optional[str]:
-    val = os.environ.get(name)
-    if val is None:
-        return None
-    return val.strip().strip('"').strip("'")
+GOOGLE_API_KEY = get_secret("GOOGLE_API_KEY")
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
 
-GOOGLE_API_KEY = _get_env("GOOGLE_API_KEY")
-SUPABASE_URL = _get_env("SUPABASE_URL")
-SUPABASE_KEY = _get_env("SUPABASE_KEY")
-
-missing = [k for k, v in {
-    "GOOGLE_API_KEY": GOOGLE_API_KEY,
-    "SUPABASE_URL": SUPABASE_URL,
-    "SUPABASE_KEY": SUPABASE_KEY,
-}.items() if not v]
-
-if missing:
-    st.error(
-        "Missing required environment variables: " + ", ".join(missing)
-    )
-    st.info("Please create a .env file in the root directory with the required keys.")
+if not all([GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY]):
+    st.error("Missing required secrets. Set GOOGLE_API_KEY, SUPABASE_URL, and SUPABASE_KEY in st.secrets or .env.")
     st.stop()
 
-# --- 2. INITIALIZE CLIENTS (Unchanged) ---
-try:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    
-    # Initialize Supabase client
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    
-    # Initialize Gemini models
-    embedding_model = "models/text-embedding-004"
-    generative_model = genai.GenerativeModel('gemini-2.5-flash')
-    
-except Exception as e:
-    st.error(f"Error initializing clients: {e}")
-    st.error("Please check your API keys and Supabase credentials.")
-    st.stop()
+# --- 2. INITIALIZE CLIENTS (Cached) ---
+# @st.cache_resource ensures these run once, not every time the user types a message.
+@st.cache_resource
+def init_clients():
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        e_model = "models/text-embedding-004"
+        g_model = genai.GenerativeModel('gemini-2.5-flash')
+        return sb_client, e_model, g_model
+    except Exception as e:
+        st.error(f"Critical Error: {e}")
+        st.stop()
 
+supabase, embedding_model, generative_model = init_clients()
 
-# --- 3. RAG CORE FUNCTIONS (One function modified) ---
+# --- 3. RAG CORE FUNCTIONS ---
 
-def get_query_embedding(text: str, model: str) -> Optional[list]:
-    """Generates an embedding for the user's query."""
+def get_query_embedding(text: str) -> Optional[list]:
     try:
         result = genai.embed_content(
-            model=model,
+            model=embedding_model,
             content=text,
-            task_type="RETRIEVAL_QUERY" # Use 'RETRIEVAL_QUERY' for queries
+            task_type="RETRIEVAL_QUERY"
         )
         return result['embedding']
     except Exception as e:
-        st.error(f"Error creating query embedding: {e}")
+        st.error(f"Embedding Error: {e}")
         return None
 
-def find_relevant_documents(supabase_client: Client, embedding: list, match_threshold=0.4, match_count=5) -> list:
-    """Finds relevant document chunks from Supabase vector store."""
+def find_relevant_documents(embedding: list, match_threshold=0.4, match_count=5) -> list:
     try:
-        # This RPC call correctly maps to your fixed SQL function
-        response = supabase_client.rpc('match_documents', {
+        response = supabase.rpc('match_documents', {
             'query_embedding': embedding,
             'match_threshold': match_threshold,
             'match_count': match_count
         }).execute()
-        
         return response.data
     except Exception as e:
-        st.error(f"Error searching Supabase: {e}")
-        st.info(f"Supabase error: {e}")
+        st.error(f"Database Error: {e}")
         return []
 
-# *** MODIFIED FUNCTION ***
-# Removed `st.warning` to make it a pure function.
-# It now returns the answer and a boolean indicating if context was found.
-def get_generative_answer(model: genai.GenerativeModel, query: str, context_chunks: list) -> Tuple[str, bool]:
-    """Generates a final answer using the query and retrieved context."""
-    
+def get_generative_answer(query: str, context_chunks: list) -> Tuple[str, bool]:
     if not context_chunks:
-        context_found = False
         prompt = f"""
-        You are a helpful general assistant. The user's question could not be
-        found in the database. Answer the user's question from your
-        general knowledge.
+        You are a helpful assistant. The user's specific query was not found in the database.
+        Answer based on general knowledge, but explicitly state that this is NOT from the internal database.
         
-        USER QUESTION:
-        {query}
-
-        ANSWER:
+        USER QUESTION: {query}
         """
+        context_found = False
     else:
         context_found = True
-        # Format the context for the prompt
-        formatted_context = "\n\n---\n\n".join(
+        formatted_context = "\n\n".join(
             [f"Source: {chunk['source_filename']}\nContent: {chunk['content']}" for chunk in context_chunks]
         )
-        
         prompt = f"""
-        You are an expert assistant for a supplier database.
-        Use the following pieces of context from supplier documents to answer the user's question.
-        If the answer isn't in the context, say you don't know. Do not make up information.
-        Reply with general knowledge if context/data not available
+        You are an expert assistant for the 'IntegralDB' supplier system.
+        Answer the question using ONLY the context provided below.
+        If the answer is not in the context, say "I don't have that information in the database."
+        
         CONTEXT:
         {formatted_context}
 
-        USER QUESTION:
-        {query}
-
-        ANSWER:
+        USER QUESTION: {query}
         """
     
     try:
-        response = model.generate_content(prompt)
+        response = generative_model.generate_content(prompt)
         return response.text, context_found
     except Exception as e:
-        st.error(f"Error generating answer: {e}")
-        return "Sorry, I encountered an error while generating the answer.", False
+        return "I encountered an error generating the response.", False
 
-# --- 4. STREAMLIT UI (Completely replaced with chat logic) ---
+# --- 4. MAIN UI ---
 
 def main():
-    st.set_page_config(page_title="IntegralDB", layout="wide")
     st.title("Integral Internal Database")
     
-    # 1. Initialize chat history in session state
+    # Sidebar for controls
+    with st.sidebar:
+        st.header("Controls")
+        if st.button("Clear Chat History", type="primary"):
+            st.session_state.messages = []
+            st.rerun()
+
+    # Initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = [
-            {"role": "assistant", "content": "Hi! Ask me anything about your database."}
+            {"role": "assistant", "content": "System Ready. Query the supplier database."}
         ]
 
-    # 2. Display all past messages
+    # Display chat
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # 3. Get new user query using st.chat_input
-    if query := st.chat_input("Mention all details that are needed here."):
-        
-        # 4. Add and display the user's query
+    # Handle Input
+    if query := st.chat_input("Ask about suppliers, parts, or contracts..."):
         st.session_state.messages.append({"role": "user", "content": query})
         with st.chat_message("user"):
             st.markdown(query)
 
-        # 5. Generate and display the assistant's response
         with st.chat_message("assistant"):
-            with st.spinner("Searching and thinking..."):
+            with st.spinner("Processing..."):
+                # 1. Embed
+                q_embedding = get_query_embedding(query)
                 
-                # --- This is the full RAG pipeline from your old `main` ---
-                
-                # 1. Create query embedding
-                query_embedding = get_query_embedding(query, embedding_model)
-                
+                # 2. Retrieve
                 documents = []
-                context_found = False
+                if q_embedding:
+                    documents = find_relevant_documents(q_embedding)
                 
-                if query_embedding:
-                    # 2. Find relevant documents
-                    documents = find_relevant_documents(supabase, query_embedding)
+                # 3. Generate
+                answer, context_found = get_generative_answer(query, documents)
                 
-                # 3. Generate answer
-                answer, context_found = get_generative_answer(generative_model, query, documents)
-                
-                # 4. Display the answer
                 st.markdown(answer)
                 
-                # 5. (Optional) Show sources if they were used
+                # 4. Sources Expander
                 if context_found and documents:
-                    with st.expander("Show Sources"):
+                    with st.expander("View Retrieved Sources"):
                         for doc in documents:
-                            st.markdown(f"**Source:** `{doc['source_filename']}`")
-                            st.markdown(f"**Similarity:** {doc['similarity']:.4f}")
-                            st.caption(f"{doc['content'][:300]}...")
+                            st.markdown(f"**{doc.get('source_filename', 'Unknown Source')}** (Sim: {doc.get('similarity', 0):.2f})")
+                            st.caption(doc.get('content', '')[:200] + "...")
                 
-                # 6. Add the text answer to session state
                 st.session_state.messages.append({"role": "assistant", "content": answer})
 
 if __name__ == "__main__":

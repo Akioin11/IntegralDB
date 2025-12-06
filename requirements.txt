@@ -1,9 +1,8 @@
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
-pdfplumber
 google-generativeai
 supabase
 python-dotenv
-pydantic
-streamlit
+pdfplumber
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
